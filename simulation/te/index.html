@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>Simulation</title>
+<style>
+  :root { --fond: #f4f5f7; --carte: #ffffff; --texte: #1d2330; --doux: #5d6677; --bord: #d5d9e0; --accent: #1f5fbf; --erreur: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --fond: #14171c; --carte: #1d2128; --texte: #e6e9ee; --doux: #9aa3b2; --bord: #343a45; --accent: #6ea2f0; --erreur: #f2817a; }
+  }
+  :root[data-theme="dark"] { --fond: #14171c; --carte: #1d2128; --texte: #e6e9ee; --doux: #9aa3b2; --bord: #343a45; --accent: #6ea2f0; --erreur: #f2817a; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--fond); color: var(--texte); font: 16px/1.45 system-ui, sans-serif; }
+  #porte { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  form { width: 100%; max-width: 360px; background: var(--carte); border: 1px solid var(--bord); border-radius: 10px; padding: 24px; }
+  h1 { font-size: 1.15rem; margin: 0 0 4px; }
+  p { margin: 0 0 16px; color: var(--doux); font-size: .92rem; }
+  input { width: 100%; padding: 10px 12px; font: inherit; color: var(--texte); background: var(--fond); border: 1px solid var(--bord); border-radius: 6px; }
+  button { margin-top: 12px; width: 100%; padding: 10px; font: inherit; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 6px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: progress; }
+  #msg { min-height: 1.4em; margin: 10px 0 0; font-size: .9rem; color: var(--erreur); }
+  iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: none; }
+</style>
+</head>
+<body>
+<div id="porte">
+  <form id="f" autocomplete="off">
+    <h1>Simulation</h1>
+    <p>Accès réservé. Saisissez le mot de passe qui vous a été communiqué.</p>
+    <input id="mdp" type="password" autocomplete="current-password" aria-label="Mot de passe" required autofocus>
+    <button id="ok" type="submit">Ouvrir</button>
+    <div id="msg" role="status"></div>
+  </form>
+</div>
+<iframe id="vue" title="Simulation"></iframe>
+<script>
+(() => {
+  const P = {"sel":"LlQcvpfy+PqmUZTX485+OA==","iter":600000};
+  const enc = new TextEncoder();
+  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  let cleAes, cleMac;
+
+  async function deriver(mdp) {
+    const base = await crypto.subtle.importKey("raw", enc.encode(mdp), "PBKDF2", false, ["deriveBits"]);
+    const bits = new Uint8Array(await crypto.subtle.deriveBits(
+      { name: "PBKDF2", salt: b64(P.sel), iterations: P.iter, hash: "SHA-256" }, base, 512));
+    cleAes = await crypto.subtle.importKey("raw", bits.slice(0, 32), "AES-GCM", false, ["decrypt"]);
+    cleMac = await crypto.subtle.importKey("raw", bits.slice(32), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  }
+  async function nom(f) {
+    const s = new Uint8Array(await crypto.subtle.sign("HMAC", cleMac, enc.encode(f)));
+    return Array.from(s.slice(0, 16), (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  // Fichier publié -> octets en clair (déchiffrés puis décompressés).
+  async function lire(f) {
+    const r = await fetch("d/" + await nom(f) + ".bin", { cache: "no-cache" });
+    if (!r.ok) throw new Error(f + " " + r.status);
+    const b = new Uint8Array(await r.arrayBuffer());
+    const gz = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b.slice(0, 12) }, cleAes, b.slice(12));
+    return new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"))).blob();
+  }
+  // Appelé par la page de simulation (dans le cadre) à la place de fetch pour ses fichiers relatifs.
+  window.__servir = async (u) => {
+    const f = String(u).split(/[?#]/)[0].replace(/^\.\//, "");
+    return new Response(await lire(f), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const RELAIS = '<script>(function(){var P=window.parent,f=window.fetch.bind(window);' +
+    'window.fetch=function(u,o){var s=typeof u==="string"?u:(u&&u.url)||"";' +
+    'return /^[a-z][a-z0-9+.-]*:|^\\/\\//i.test(s)?f(u,o):P.__servir(s);};})();<\/script>';
+
+  const $ = (id) => document.getElementById(id);
+  $("f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("ok").disabled = true; $("msg").textContent = ""; $("ok").textContent = "Vérification…";
+    let html;
+    try {
+      await deriver($("mdp").value);
+      html = await (await lire("index.html")).text();
+    } catch (err) {
+      $("msg").textContent = "Mot de passe incorrect.";
+      $("ok").disabled = false; $("ok").textContent = "Ouvrir"; $("mdp").select();
+      return;
+    }
+    $("mdp").value = "";
+    // Le relais doit précéder tout script de la page ; celle-ci n'a pas toujours de <head>.
+    html = /<head[\s>]/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + RELAIS) : RELAIS + html;
+    $("vue").srcdoc = html;
+    $("vue").style.display = "block";
+    $("porte").remove();
+  });
+})();
+</script>
+</body>
+</html>
