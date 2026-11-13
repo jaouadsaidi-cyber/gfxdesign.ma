@@ -73,6 +73,10 @@
   const $ = (id) => document.getElementById(id);
   $("f").addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
+      $("msg").textContent = "Cette page doit être ouverte en https:// (le déchiffrement n'est pas permis en http).";
+      return;
+    }
     $("ok").disabled = true; $("msg").textContent = ""; $("ok").textContent = "Vérification…";
     let html;
     try {
