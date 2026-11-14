@@ -42,7 +42,7 @@
 <iframe id="vue" title="Simulation"></iframe>
 <script>
 (() => {
-  const P = {"sel":"l8FtLh0rhE49476CpABYkw==","iter":600000};
+  let P;   // sel et itérations : cle.json, relu à chaque essai (une page d'entrée en cache resterait liée à l'ancien mot de passe)
   const enc = new TextEncoder();
   const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
   let cleAes, cleMac;
@@ -88,7 +88,8 @@
     $("ok").disabled = true; $("msg").textContent = ""; $("ok").textContent = "Vérification…";
     let html;
     try {
-      await deriver($("mdp").value);
+      P = await fetch("cle.json", { cache: "no-cache" }).then((r) => { if (!r.ok) throw new Error("cle.json " + r.status); return r.json(); });
+      await deriver($("mdp").value.trim());   // un copier-coller depuis le terminal peut ajouter des espaces
       html = await (await lire("index.html")).text();
     } catch (err) {
       $("msg").textContent = "Mot de passe incorrect.";
